@@ -10,7 +10,10 @@ export async function sunatLogin(ruc, usuario, clave) {
     slowMo: 500, // Retraso visual (0.5s)
   });
 
-  const context = await browser.newContext();
+  const context = await browser.newContext({
+    acceptDownloads: true,
+    downloadsPath: "./descargas",
+  });
   const page = await context.newPage();
 
   // Ir a la página de login
@@ -59,11 +62,69 @@ export async function sunatLogin(ruc, usuario, clave) {
     // await page.click("text=Buscar");
     // console.log("💾 Se hizo clic en 'Buscar'");
 
-    const frames = page.frames();
-    for (const frame of frames) {
-      console.log("Frame name:", frame.name());
-      console.log("Frame URL:", frame.url());
+
+    try {
+      // 🕓 Esperar que cargue todo el DOM
+      await page.waitForTimeout(5000);
+
+      // 🔍 Mostrar todos los frames para confirmar cuál contiene los selects
+      const frames = page.frames();
+      console.log("🧭 FRAMES DETECTADOS:");
+      frames.forEach(f => console.log("👉", f.name(), "-", f.url()));
+
+      // 🧩 Buscar frame por nombre o parte de la URL
+      const frame = frames.find(f => f.name() === 'iframeApplication' || f.url().includes('consultaDeclaracionInternetprincipal'));
+
+      if (!frame) {
+        throw new Error("❌ No se encontró el iframe esperado.");
+      }
+
+      console.log("✅ Frame encontrado:", frame.name(), frame.url());
+
+      // 📅 Fecha
+      const mesInicio = '01';
+      const añoInicio = '2025';
+
+      const mesFin = '02';
+      const añoFin = '2025';
+
+      console.log(`🗓️ Seleccionando mes ${mesInicio} y año actual`);
+
+      // 🕓 Esperar los selects dentro del frame
+      await frame.waitForSelector("#periodo_tributario_1", { timeout: 10000 });
+      await frame.selectOption("#periodo_tributario_1", mesInicio);
+      await frame.waitForSelector('select[ng-model="consultaBean.rangoPeriodoTributarioInicioAnio"]', { timeout: 10000 });
+      await frame.selectOption('select[ng-model="consultaBean.rangoPeriodoTributarioInicioAnio"]', añoInicio);
+
+      await frame.waitForSelector("#periodo_tributario_2", { timeout: 10000 });
+      await frame.selectOption("#periodo_tributario_2", mesFin);
+      await frame.waitForSelector('select[ng-model="consultaBean.rangoPeriodoTributarioFinAnio"]', { timeout: 10000 });
+      await frame.selectOption('select[ng-model="consultaBean.rangoPeriodoTributarioFinAnio"]', añoFin);
+
+      console.log("✅ Mes y año seleccionados correctamente");
+
+      await frame.waitForSelector('button:has-text("Buscar")', { timeout: 10000 });
+      await frame.click('button:has-text("Buscar")');
+      console.log("🔍 Clic en botón Buscar realizado correctamente");
+
+      await page.waitForTimeout(5000);
+
+      await frame.waitForSelector('button:has-text("EXCEL")', { timeout: 10000 });
+      const [download] = await Promise.all([
+        page.waitForEvent("download"), // Espera la descarga
+        frame.click('button:has-text("EXCEL")') // Clic que inicia la descarga
+      ]);
+
+      // 💾 Guardar archivo en carpeta personalizada
+      const filePath = `./descargas/${download.suggestedFilename()}`;
+      await download.saveAs(filePath);
+
+      console.log(`✅ Excel descargado correctamente en: ${filePath}`);
+
+    } catch (error) {
+      console.error("❌ Error al seleccionar mes o año:", error.message);
     }
+
   } catch (error) {
     console.error("❌ Error al navegar por el menú:", error.message);
   }
