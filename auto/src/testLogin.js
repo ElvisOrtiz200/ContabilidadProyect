@@ -1,4 +1,4 @@
-import { sunatLogin } from './services/sunatLogin.js';
-import 'dotenv/config';
+import { sunatLogin } from './services/sunat/sunatLogin.js';
+import { config } from './config/index.js';
 
-await sunatLogin(process.env.SUNAT_RUC, process.env.SUNAT_USER, process.env.SUNAT_PASS);
+await sunatLogin(config.sunat.ruc, config.sunat.usuario, config.sunat.clave);

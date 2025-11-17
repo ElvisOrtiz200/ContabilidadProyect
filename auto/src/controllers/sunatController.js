@@ -1,25 +1,38 @@
-import { sunatLogin } from "../services/sunatLogin.js";
-import { descargarConstancias } from "../services/sunatDescarga.js";
+import { sunatLogin } from '../services/sunat/sunatLogin.js';
+import { descargarConstancias } from '../services/sunat/sunatDescarga.js';
+import { logger } from '../utils/logger.js';
 
 export const SunatController = {
-  login: async (req, res) => {
+  login: async (req, res, next) => {
     try {
       const { ruc, usuario, clave } = req.body;
+      logger.info('Iniciando login en SUNAT', { ruc });
+      
       await sunatLogin(ruc, usuario, clave);
-      res.json({ message: "Sesion iniciada correctamente" });
+      
+      res.json({
+        success: true,
+        message: 'Sesión iniciada correctamente',
+      });
     } catch (error) {
-      console.log(error);
-      res.status(500).json({ error: "Error en inicio de sesión" });
+      logger.error('Error en inicio de sesión', error);
+      next(error);
     }
   },
 
-  descargar: async (req, res) => {
+  descargar: async (req, res, next) => {
     try {
+      logger.info('Iniciando descarga de archivos');
+      
       await descargarConstancias();
-      res.json({ message: "Excel descargado correctamente" });
+      
+      res.json({
+        success: true,
+        message: 'Excel descargado correctamente',
+      });
     } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: "Error al descargar Excel" });
+      logger.error('Error al descargar Excel', error);
+      next(error);
     }
   },
 };
