@@ -104,13 +104,13 @@ async function handleConsultaDeclaraciones(page) {
 
     // Buscar frame
     const frames = page.frames();
-    logger.debug('FRAMES DETECTADOS:', { 
+    logger.debug('FRAMES DETECTADOS:', {
       frames: frames.map(f => ({ name: f.name(), url: f.url() }))
     });
 
     const frame = frames.find(
-      f => f.name() === SELECTORS.FRAME.IFRAME_APPLICATION || 
-           f.url().includes('consultaDeclaracionInternetprincipal')
+      f => f.name() === SELECTORS.FRAME.IFRAME_APPLICATION ||
+        f.url().includes('consultaDeclaracionInternetprincipal')
     );
 
     if (!frame) {
@@ -137,30 +137,30 @@ async function handleConsultaDeclaraciones(page) {
 
     logger.info(`Seleccionando mes ${mesInicio} y año ${añoInicio}`);
 
-    await frame.waitForSelector(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_1, { 
-      timeout: TIMEOUTS.ELEMENT_WAIT 
+    await frame.waitForSelector(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_1, {
+      timeout: TIMEOUTS.ELEMENT_WAIT
     });
     await frame.selectOption(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_1, mesInicio);
-    
-    await frame.waitForSelector(SELECTORS.FORMULARIO.RANGO_PERIODO_INICIO_ANIO, { 
-      timeout: TIMEOUTS.ELEMENT_WAIT 
+
+    await frame.waitForSelector(SELECTORS.FORMULARIO.RANGO_PERIODO_INICIO_ANIO, {
+      timeout: TIMEOUTS.ELEMENT_WAIT
     });
     await frame.selectOption(SELECTORS.FORMULARIO.RANGO_PERIODO_INICIO_ANIO, añoInicio);
 
-    await frame.waitForSelector(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_2, { 
-      timeout: TIMEOUTS.ELEMENT_WAIT 
+    await frame.waitForSelector(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_2, {
+      timeout: TIMEOUTS.ELEMENT_WAIT
     });
     await frame.selectOption(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_2, mesFin);
-    
-    await frame.waitForSelector(SELECTORS.FORMULARIO.RANGO_PERIODO_FIN_ANIO, { 
-      timeout: TIMEOUTS.ELEMENT_WAIT 
+
+    await frame.waitForSelector(SELECTORS.FORMULARIO.RANGO_PERIODO_FIN_ANIO, {
+      timeout: TIMEOUTS.ELEMENT_WAIT
     });
     await frame.selectOption(SELECTORS.FORMULARIO.RANGO_PERIODO_FIN_ANIO, añoFin);
 
     logger.info('Mes y año seleccionados correctamente');
 
-    await frame.waitForSelector(SELECTORS.FORMULARIO.BTN_BUSCAR, { 
-      timeout: TIMEOUTS.ELEMENT_WAIT 
+    await frame.waitForSelector(SELECTORS.FORMULARIO.BTN_BUSCAR, {
+      timeout: TIMEOUTS.ELEMENT_WAIT
     });
     await frame.click(SELECTORS.FORMULARIO.BTN_BUSCAR);
     logger.info('Clic en botón Buscar realizado correctamente');
@@ -202,34 +202,74 @@ async function handleSegundaSesion(context, ruc, usuario, clave) {
     await wait(5000);
 
     const frames = page2.frames();
-    logger.debug('FRAMES DETECTADOS:', { 
+    logger.debug('FRAMES DETECTADOS:', {
       frames: frames.map(f => ({ name: f.name(), url: f.url() }))
     });
 
     const frame = frames.find(f => f.name() === SELECTORS.FRAME.IFRAME_VCE);
 
     if (frame) {
-      await frame.waitForSelector('button:has-text("Finalizar")', { timeout: 5000 });
-      await frame.click("text=Finalizar");
-      logger.info("Se hizo clic en 'Finalizar'");
 
-      await frame.waitForSelector('button:has-text("Continuar sin confirmar")', { timeout: 5000 });
-      await frame.click("text=Continuar sin confirmar");
-      logger.info("Se hizo clic en 'Continuar sin confirmar'");
+      const textos = [
+        "Finalizar",
+        "Continuar sin confirmar",
+        "Continuar"
+      ];
+
+      let hizoAlgo = false;
+
+      for (const texto of textos) {
+        console.log(`\n🔍 Buscando botón visible: "${texto}"`);
+
+        // Filtrar botones que realmente sean visibles
+        const botonesVisibles = frame.locator(
+          `//button[normalize-space(.)="${texto}" and not(contains(@style,"display:none"))]`
+        ).filter({ hasText: texto });
+
+        const count = await botonesVisibles.count();
+        console.log(`➡️ Botones visibles encontrados: ${count}`);
+
+        if (count > 0) {
+
+          for (let i = 0; i < count; i++) {
+            const btn = botonesVisibles.nth(i);
+
+            try {
+              console.log(`🟦 Haciendo clic en "${texto}" (#${i + 1})`);
+              await btn.waitFor({ state: "visible", timeout: 5000 });
+              await btn.click({ timeout: 5000 });
+
+              // esperar a que el DOM cambie antes de buscar otro botón
+              await frame.waitForTimeout(1000);
+            } catch (err) {
+              console.log(`⚠️ No se pudo clicar botón #${i + 1} (probablemente se ocultó).`);
+            }
+          }
+
+          hizoAlgo = true;
+        }
+      }
+
+      if (!hizoAlgo) {
+        console.log("⚠️ No se encontró ningún botón válido para hacer clic.");
+      }
     }
 
     // Navegación adicional
-    await page2.click("text=Mis declaraciones informativas");
+    await page2.click(SELECTORS.MENU2.DECLARACIONES);
     logger.info("Se hizo clic en 'Mis declaraciones informativas'");
 
-    await page2.click("text=Consulto mis declaraciones y pagos");
-    logger.info("Se hizo clic en 'Consulto mis declaraciones y pagos'");
+    const li = page2.locator('#nivel2_12_8');
+    await li.scrollIntoViewIfNeeded();
+    await li.click();
 
-    await page2.click("text=Declaraciones y pagos");
-    logger.info("Se hizo clic en 'Declaraciones y pagos'");
+    const li2 = page2.locator('#nivel3_12_8_1');
+    await li2.scrollIntoViewIfNeeded();
+    await li2.click();
 
-    await page2.click("text=Consulta general");
-    logger.info("Se hizo clic en 'Consulta general'");
+    const li3 = page2.locator('#nivel4_12_8_1_1_2');
+    await li3.scrollIntoViewIfNeeded();
+    await li3.click();
 
     await page2.selectOption('select[name="importepagado"]', '2');
     logger.info("Se seleccionó el importe pagado");
@@ -254,16 +294,16 @@ async function handleSegundaSesion(context, ruc, usuario, clave) {
     logger.info("Clic en botón Ir a Inicio");
 
     // Navegación adicional
-    await page2.click("text=Mis declaraciones informativas");
+    await page2.click(SELECTORS.MENU2.DECLARACIONES);
     logger.info("Se hizo clic en 'Mis declaraciones informativas'");
 
-    await page2.click("text=Presento mis declaraciones y pagos");
+    await page2.click(SELECTORS.MENU2.PRESENTO_DECLARACIONES);
     logger.info("Se hizo clic en 'Presento mis declaraciones y pagos'");
 
-    await page2.click("text=Declarativas");
+    await page2.click(SELECTORS.MENU2.DECLARATIVAS);
     logger.info("Se hizo clic en 'Declarativas'");
 
-    await page2.click("text=Consulta de NPS");
+    await page2.click(SELECTORS.MENU2.CONSULTA_NPS);
     logger.info("Se hizo clic en 'Consulta de NPS'");
 
   } catch (error) {

@@ -30,6 +30,16 @@ export const SELECTORS = {
     RANGO_PERIODO_FIN_ANIO: 'select[ng-model="consultaBean.rangoPeriodoTributarioFinAnio"]',
     BTN_BUSCAR: 'button:has-text("Buscar")',
   },
+  MENU2: {
+    DECLARACIONES: 'text=Mis declaraciones informativas',
+    CONSULTAS_DECLARACIONES_PAGOS: 'text=Consulto mis declaraciones y pagos',
+    DECLARACIONES_PAGOS: 'text=Declaraciones y pagos',
+    CONSULTA_GENERAL: 'text=Consulta general',
+    //-----------------------------------------------------------------------
+    PRESENTO_DECLARACIONES: 'text=Mis declaraciones informativas',
+    DECLARATIVAS: 'text=Declarativas',
+    CONSULTA_NPS: 'text=Consulta de NPS',
+  },
 };
 
 export const TIMEOUTS = {
