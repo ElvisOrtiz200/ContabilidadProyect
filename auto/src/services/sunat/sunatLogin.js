@@ -1,7 +1,7 @@
 import { browserService } from '../browser/browserService.js';
 import { config } from '../../config/index.js';
 import { logger } from '../../utils/logger.js';
-import { saveSession, loadSession, wait } from '../../utils/helpers.js';
+import { saveSession, loadSession, wait, calcularRango6MesesDesdeHoy } from '../../utils/helpers.js';
 import { SUNAT_URLS, SELECTORS, TIMEOUTS } from '../../config/constants.js';
 
 /**
@@ -51,13 +51,16 @@ export async function sunatLogin(ruc, usuario, clave) {
       logger.info('Cookies restauradas correctamente');
     }
 
+    const rango = calcularRango6MesesDesdeHoy();
+
     // Navegación dentro del menú
-    await navigateMenu(page);
+    await navigateMenu(page,rango);
+    
 
     // Parte 2: Segunda sesión
     logger.info('---------------------------------------------------------------');
     logger.info('-----------------------PARTE 2------------------------');
-    await sunatLoginSesion2(context, ruc, usuario, clave);
+    await sunatLoginSesion2(context, ruc, usuario, clave,rango);
 
 
     // Parte 3: Tercera sesión
@@ -79,7 +82,7 @@ export async function sunatLogin(ruc, usuario, clave) {
   }
 }
 
-async function navigateMenu(page) {
+async function navigateMenu(page,rango) {
   try {
     await page.click(SELECTORS.MENU.CONSULTAS);
     logger.info("Se hizo clic en 'Consultas'");
@@ -90,7 +93,7 @@ async function navigateMenu(page) {
     await page.click(SELECTORS.MENU.CONSULTAS_DECLARACIONES_PAGOS);
     logger.info("Se hizo clic en 'Consultas de Declaraciones y Pagos'");
 
-    await handleConsultaDeclaraciones(page);
+    await handleConsultaDeclaraciones(page,rango);
 
 
 
@@ -100,7 +103,7 @@ async function navigateMenu(page) {
   }
 }
 
-async function handleConsultaDeclaraciones(page) {
+async function handleConsultaDeclaraciones(page,rango) {
   try {
     await wait(5000);
 
@@ -131,33 +134,26 @@ async function handleConsultaDeclaraciones(page) {
     await frame.click('body', { position: { x: 5, y: 5 } });
     logger.info('Se seleccionó la etiqueta de IGV');
 
-    // Fecha
-    const mesInicio = '02';
-    const añoInicio = '2025';
-    const mesFin = '02';
-    const añoFin = '2025';
-
-    logger.info(`Seleccionando mes ${mesInicio} y año ${añoInicio}`);
 
     await frame.waitForSelector(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_1, {
       timeout: TIMEOUTS.ELEMENT_WAIT
     });
-    await frame.selectOption(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_1, mesInicio);
+    await frame.selectOption(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_1, rango.mesInicio);
 
     await frame.waitForSelector(SELECTORS.FORMULARIO.RANGO_PERIODO_INICIO_ANIO, {
       timeout: TIMEOUTS.ELEMENT_WAIT
     });
-    await frame.selectOption(SELECTORS.FORMULARIO.RANGO_PERIODO_INICIO_ANIO, añoInicio);
+    await frame.selectOption(SELECTORS.FORMULARIO.RANGO_PERIODO_INICIO_ANIO, rango.añoInicio);
 
     await frame.waitForSelector(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_2, {
       timeout: TIMEOUTS.ELEMENT_WAIT
     });
-    await frame.selectOption(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_2, mesFin);
+    await frame.selectOption(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_2, rango.mesFin);
 
     await frame.waitForSelector(SELECTORS.FORMULARIO.RANGO_PERIODO_FIN_ANIO, {
       timeout: TIMEOUTS.ELEMENT_WAIT
     });
-    await frame.selectOption(SELECTORS.FORMULARIO.RANGO_PERIODO_FIN_ANIO, añoFin);
+    await frame.selectOption(SELECTORS.FORMULARIO.RANGO_PERIODO_FIN_ANIO, rango.añoFin);
 
     logger.info('Mes y año seleccionados correctamente');
 
@@ -186,7 +182,7 @@ async function handleConsultaDeclaraciones(page) {
   }
 }
 
-async function navigateMenuSesion2(page2) {
+async function navigateMenuSesion2(page2,rango) {
   try {
     await wait(5000);
 
@@ -202,7 +198,7 @@ async function navigateMenuSesion2(page2) {
       const textos = [
         "Finalizar",
         "Continuar sin confirmar",
-        "Continuar"
+        "Ver mas tarde"
       ];
 
       let hizoAlgo = false;
@@ -260,7 +256,7 @@ async function navigateMenuSesion2(page2) {
     await li3.scrollIntoViewIfNeeded();
     await li3.click();
 
-    await handleSegundaSesion(page2,frames);
+    await handleSegundaSesion(page2,rango);
 
 
   } catch (error) {
@@ -269,7 +265,7 @@ async function navigateMenuSesion2(page2) {
   }
 }
 
-async function sunatLoginSesion2(context, ruc, usuario, clave) {
+async function sunatLoginSesion2(context, ruc, usuario, clave, rango) {
   try {
     const page2 = await context.newPage();
 
@@ -281,8 +277,8 @@ async function sunatLoginSesion2(context, ruc, usuario, clave) {
     await page2.fill(SELECTORS.LOGIN.CLAVE, clave);
     await page2.click(SELECTORS.LOGIN.BTN_ACEPTAR);
 
-    await navigateMenuSesion2(page2);
-    await navegarMenuConsultaNPSSesion3(page2);
+    await navigateMenuSesion2(page2,rango);
+    await navegarMenuConsultaNPSSesion3(page2,rango);
 
   } catch (error) {
     logger.error('Error al iniciar en la sesion 2', error);
@@ -327,7 +323,7 @@ async function navegarMenuConsultaNPSSesion3(page2){
 }
 
 
-async function handleSegundaSesion(page2) {
+async function handleSegundaSesion(page2,rango) {
   try {
 
     await wait(5000);
@@ -356,16 +352,10 @@ async function handleSegundaSesion(page2) {
 
     logger.info("Se seleccionó el importe pagado");
 
-    // Fecha (PERIODO TRIBUTARIO)
-    const mesDesde = '02';
-    const añoDesde = '2025';
-    const mesHasta = '02';
-    const añoHasta = '2025';
-
-    await frame2.selectOption('select[name="mdesde"]', mesDesde);
-    await frame2.selectOption('select[name="adesde"]', añoDesde);
-    await frame2.selectOption('select[name="mhasta"]', mesHasta);
-    await frame2.selectOption('select[name="ahasta"]', añoHasta);
+    await frame2.selectOption('select[name="mdesde"]', rango.mesInicio);
+    await frame2.selectOption('select[name="adesde"]', rango.añoInicio);
+    await frame2.selectOption('select[name="mhasta"]', rango.mesFin);
+    await frame2.selectOption('select[name="ahasta"]', rango.añoFin);
 
     if (frame2) {
       await frame2.click(SELECTORS.FORMULARIO.BTN_BUSCAR);
