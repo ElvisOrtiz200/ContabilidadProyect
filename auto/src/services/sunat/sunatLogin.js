@@ -52,7 +52,18 @@ export async function sunatLogin(ruc, usuario, clave) {
     }
 
     // Navegación dentro del menú
-    await navigateMenu(page, context, ruc, usuario, clave);
+    await navigateMenu(page);
+
+    // Parte 2: Segunda sesión
+    logger.info('---------------------------------------------------------------');
+    logger.info('-----------------------PARTE 2------------------------');
+    await sunatLoginSesion2(context, ruc, usuario, clave);
+
+
+    // Parte 3: Tercera sesión
+    logger.info('---------------------------------------------------------------');
+    logger.info('-----------------------PARTE 3------------------------');
+    await consultaNPSSesion3(context);
 
     // Mantener sesión abierta
     logger.info('Manteniendo el navegador abierto...');
@@ -68,10 +79,7 @@ export async function sunatLogin(ruc, usuario, clave) {
   }
 }
 
-/**
- * Navega por el menú de SUNAT
- */
-async function navigateMenu(page, context, ruc, usuario, clave) {
+async function navigateMenu(page) {
   try {
     await page.click(SELECTORS.MENU.CONSULTAS);
     logger.info("Se hizo clic en 'Consultas'");
@@ -84,10 +92,7 @@ async function navigateMenu(page, context, ruc, usuario, clave) {
 
     await handleConsultaDeclaraciones(page);
 
-    // Parte 2: Segunda sesión
-    logger.info('---------------------------------------------------------------');
-    logger.info('-----------------------PARTE 2------------------------');
-    await handleSegundaSesion(context, ruc, usuario, clave);
+
 
   } catch (error) {
     logger.error('Error al navegar por el menú', error);
@@ -95,9 +100,6 @@ async function navigateMenu(page, context, ruc, usuario, clave) {
   }
 }
 
-/**
- * Maneja la consulta de declaraciones
- */
 async function handleConsultaDeclaraciones(page) {
   try {
     await wait(5000);
@@ -184,21 +186,8 @@ async function handleConsultaDeclaraciones(page) {
   }
 }
 
-/**
- * Maneja la segunda sesión de SUNAT
- */
-async function handleSegundaSesion(context, ruc, usuario, clave) {
-  const page2 = await context.newPage();
-
+async function navigateMenuSesion2(page2) {
   try {
-    await page2.goto(SUNAT_URLS.LOGIN_MENU_SOL_2);
-
-    // Completar formulario
-    await page2.fill(SELECTORS.LOGIN.RUC, ruc);
-    await page2.fill(SELECTORS.LOGIN.USUARIO, usuario);
-    await page2.fill(SELECTORS.LOGIN.CLAVE, clave);
-    await page2.click(SELECTORS.LOGIN.BTN_ACEPTAR);
-
     await wait(5000);
 
     const frames = page2.frames();
@@ -271,7 +260,100 @@ async function handleSegundaSesion(context, ruc, usuario, clave) {
     await li3.scrollIntoViewIfNeeded();
     await li3.click();
 
-    await page2.selectOption('select[name="importepagado"]', '2');
+    await handleSegundaSesion(page2,frames);
+
+
+  } catch (error) {
+    logger.error('Error al navegar por el menú', error);
+    throw error;
+  }
+}
+
+async function sunatLoginSesion2(context, ruc, usuario, clave) {
+  try {
+    const page2 = await context.newPage();
+
+    await page2.goto(SUNAT_URLS.LOGIN_MENU_SOL_2);
+
+    // Completar formulario
+    await page2.fill(SELECTORS.LOGIN.RUC, ruc);
+    await page2.fill(SELECTORS.LOGIN.USUARIO, usuario);
+    await page2.fill(SELECTORS.LOGIN.CLAVE, clave);
+    await page2.click(SELECTORS.LOGIN.BTN_ACEPTAR);
+
+    await navigateMenuSesion2(page2);
+    await navegarMenuConsultaNPSSesion3(page2);
+
+  } catch (error) {
+    logger.error('Error al iniciar en la sesion 2', error);
+    throw error;
+  }
+}
+
+
+async function navegarMenuConsultaNPSSesion3(page2){
+  try {
+
+    await wait(5000);
+
+    await page2.click('button.aOpcionInicio');
+    logger.info("Clic en botón Ir a Inicio");
+
+    const btnEmpresa = page2.locator('#divOpcionServicio2');
+    await btnEmpresa.click();
+    logger.info("Clic en botón Empresas");
+
+    // Navegación adicional
+
+    await page2.click(SELECTORS.MENU2.DECLARACIONES);
+    logger.info("Se hizo clic en 'Mis declaraciones informativas'");
+
+    const li = page2.locator('#nivel2_12_1');
+    await li.scrollIntoViewIfNeeded();
+    await li.click();
+
+    const li2 = page2.locator('#nivel3_12_1_1');
+    await li2.scrollIntoViewIfNeeded();
+    await li2.click();
+
+    const li3 = page2.locator('#nivel4_12_1_1_1_7');
+    await li3.scrollIntoViewIfNeeded();
+    await li3.click();
+
+  } catch (error) {
+    logger.error('Error al iniciar en la sesion 3', error);
+    throw error;
+  }
+}
+
+
+async function handleSegundaSesion(page2) {
+  try {
+
+    await wait(5000);
+
+    const frames = page2.frames();
+    logger.debug('FRAMES DETECTADOS:', {
+      frames: frames.map(f => ({ name: f.name(), url: f.url() }))
+    });
+
+    const frame2 = frames.find(f => f.name() === SELECTORS.FRAME.IFRAME_APPLICATION);
+
+    if (!frame2) {
+      console.log("❌ No se encontró el iframe:", SELECTORS.FRAME.IFRAME_APPLICATION);
+
+      console.log("📌 Iframes encontrados:");
+      for (const f of frames) console.log(" -", f.name());
+
+      throw new Error("IFRAME_APPLICATION no existe en esta página");
+    }
+
+    console.log("➡️ Iframe encontrado:", frame2.name());
+
+    await frame2.waitForSelector('select[name="importepagado"]', { timeout: 10000 });
+
+    await frame2.selectOption('select[name="importepagado"]', '2');
+
     logger.info("Se seleccionó el importe pagado");
 
     // Fecha (PERIODO TRIBUTARIO)
@@ -280,31 +362,15 @@ async function handleSegundaSesion(context, ruc, usuario, clave) {
     const mesHasta = '02';
     const añoHasta = '2025';
 
-    await page2.selectOption('select[name="mdesde"]', mesDesde);
-    await page2.selectOption('select[name="adesde"]', añoDesde);
-    await page2.selectOption('select[name="mhasta"]', mesHasta);
-    await page2.selectOption('select[name="ahasta"]', añoHasta);
+    await frame2.selectOption('select[name="mdesde"]', mesDesde);
+    await frame2.selectOption('select[name="adesde"]', añoDesde);
+    await frame2.selectOption('select[name="mhasta"]', mesHasta);
+    await frame2.selectOption('select[name="ahasta"]', añoHasta);
 
-    if (frame) {
-      await frame.click(SELECTORS.FORMULARIO.BTN_BUSCAR);
+    if (frame2) {
+      await frame2.click(SELECTORS.FORMULARIO.BTN_BUSCAR);
       logger.info("Clic en botón Buscar realizado correctamente");
     }
-
-    await page2.click('button.aOpcionInicio');
-    logger.info("Clic en botón Ir a Inicio");
-
-    // Navegación adicional
-    await page2.click(SELECTORS.MENU2.DECLARACIONES);
-    logger.info("Se hizo clic en 'Mis declaraciones informativas'");
-
-    await page2.click(SELECTORS.MENU2.PRESENTO_DECLARACIONES);
-    logger.info("Se hizo clic en 'Presento mis declaraciones y pagos'");
-
-    await page2.click(SELECTORS.MENU2.DECLARATIVAS);
-    logger.info("Se hizo clic en 'Declarativas'");
-
-    await page2.click(SELECTORS.MENU2.CONSULTA_NPS);
-    logger.info("Se hizo clic en 'Consulta de NPS'");
 
   } catch (error) {
     logger.error('Error en segunda sesión', error);
