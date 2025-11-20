@@ -20,7 +20,7 @@ const validateLogin = (req, res, next) => {
 // Todas las rutas de SUNAT requieren autenticación
 router.use(authenticate);
 
-router.post('/login', validateLogin, SunatController.login);
+router.post('/obtenerRentas', validateLogin, SunatController.obtenerRentaDeclaracionesYPagos);
 router.post('/descargar', SunatController.descargar);
 
 export default router;

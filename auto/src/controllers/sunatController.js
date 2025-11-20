@@ -3,16 +3,20 @@ import { descargarConstancias } from '../services/sunat/sunatDescarga.js';
 import { logger } from '../utils/logger.js';
 
 export const SunatController = {
-  login: async (req, res, next) => {
+  obtenerRentaDeclaracionesYPagos: async (req, res, next) => {
     try {
       const { ruc, usuario, clave } = req.body;
       logger.info('Iniciando login en SUNAT', { ruc });
       
-      await sunatLogin(ruc, usuario, clave);
-      
-      res.json({
+      const result = await sunatLogin(ruc, usuario, clave);
+      console.log(result);
+      res.status(200).json({
         success: true,
-        message: 'Sesión iniciada correctamente',
+        message: 'Sesión iniciada correctamente, proceso ejecutandose',
+        data: {
+          renta: result.rentas,
+          importe: result.importePagado
+        }
       });
     } catch (error) {
       logger.error('Error en inicio de sesión', error);
@@ -35,4 +39,5 @@ export const SunatController = {
       next(error);
     }
   },
+
 };

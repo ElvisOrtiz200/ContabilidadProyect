@@ -54,19 +54,19 @@ export async function sunatLogin(ruc, usuario, clave) {
     const rango = calcularRango6MesesDesdeHoy();
 
     // Navegación dentro del menú
-    const resultados =await navigateMenu(page, rango);
+    const resultados = await navigateMenu(page, rango);
 
 
     // Parte 2: Segunda sesión
     logger.info('---------------------------------------------------------------');
     logger.info('-----------------------PARTE 2------------------------');
-    await sunatLoginSesion2(context, ruc, usuario, clave, rango);
+    const resulImporte = await sunatLoginSesion2(context, ruc, usuario, clave, rango);
 
 
     // Parte 3: Tercera sesión
     logger.info('---------------------------------------------------------------');
     logger.info('-----------------------PARTE 3------------------------');
-    await consultaNPSSesion3(context);
+    // await consultaNPSSesion3(context);
 
     // Mantener sesión abierta
     logger.info('Manteniendo el navegador abierto...');
@@ -74,7 +74,11 @@ export async function sunatLogin(ruc, usuario, clave) {
 
     console.log(resultados);
 
-    return resultados;
+    return {
+      rentas: resultados,
+      importePagado: resulImporte
+    };
+    
 
   } catch (error) {
     logger.error('Error en sunatLogin', error);
@@ -100,7 +104,7 @@ async function navigateMenu(page, rango) {
     const resultados = await handleConsultaDeclaraciones(page, rango);
 
     return resultados;
-    
+
   } catch (error) {
     logger.error('Error al navegar por el menú', error);
     throw error;
@@ -228,9 +232,7 @@ async function handleConsultaDeclaraciones(page, rango) {
       });
     }
 
-    return {
-      rentas: resultados,
-    };
+    return resultados;
 
   } catch (error) {
     logger.error('Error al seleccionar mes o año', error);
@@ -312,8 +314,9 @@ async function navigateMenuSesion2(page2, rango) {
     await li3.scrollIntoViewIfNeeded();
     await li3.click();
 
-    await handleSegundaSesion(page2, rango);
+    const resulImporte = await handleSegundaSesion(page2, rango);
 
+    return resulImporte;
 
   } catch (error) {
     logger.error('Error al navegar por el menú', error);
@@ -333,8 +336,10 @@ async function sunatLoginSesion2(context, ruc, usuario, clave, rango) {
     await page2.fill(SELECTORS.LOGIN.CLAVE, clave);
     await page2.click(SELECTORS.LOGIN.BTN_ACEPTAR);
 
-    await navigateMenuSesion2(page2, rango);
+    const resulImporte = await navigateMenuSesion2(page2, rango);
     await navegarMenuConsultaNPSSesion3(page2, rango);
+
+    return resulImporte;
 
   } catch (error) {
     logger.error('Error al iniciar en la sesion 2', error);
@@ -413,15 +418,52 @@ async function handleSegundaSesion(page2, rango) {
     await frame2.selectOption('select[name="mhasta"]', rango.mesFin);
     await frame2.selectOption('select[name="ahasta"]', rango.añoFin);
 
+    const resultados = [];
+
     if (frame2) {
       await frame2.click(SELECTORS.FORMULARIO.BTN_BUSCAR);
       logger.info("Clic en botón Buscar realizado correctamente");
+
+      // Esperar que la tabla cargue
+      await frame2.waitForSelector("#tblDetalleDeclPagos tbody tr", {
+        timeout: 15000
+      });
+
+      const obtenerTablaCompleta = async (frame, selectorTabla) => {
+        return await frame.$$eval(`${selectorTabla} tbody tr`, filas =>
+          filas.map(fila => {
+            const celdas = [...fila.querySelectorAll("td")];
+            return celdas.map(td => td.innerText.trim());
+          })
+        );
+      };
+
+      // Uso:
+      const tabla = await obtenerTablaCompleta(frame2, "#tblDetalleDeclPagos");
+
+      const extraerColumnas = (tabla, indices) => {
+        return tabla.map(fila =>
+          indices.map(i => fila[i] ?? null) // si una columna no existe, devuelve null
+        );
+      };
+
+      const columnas = extraerColumnas(tabla, [5, 9]);
+      console.log(columnas);
+
+      // Guardar en array de resultados
+      for (const fila of columnas) {
+        resultados.push({
+          fechaPres: fila[0], // primera columna
+          importe: fila[1],   // segunda columna
+        });
+      }
     }
+
+    return resultados;
 
   } catch (error) {
     logger.error('Error en segunda sesión', error);
     throw error;
   }
 }
-
 
