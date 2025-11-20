@@ -1,7 +1,7 @@
 import { browserService } from '../browser/browserService.js';
 import { config } from '../../config/index.js';
 import { logger } from '../../utils/logger.js';
-import { saveSession, loadSession, wait } from '../../utils/helpers.js';
+import { saveSession, loadSession, wait, calcularRango6MesesDesdeHoy } from '../../utils/helpers.js';
 import { SUNAT_URLS, SELECTORS, TIMEOUTS } from '../../config/constants.js';
 
 /**
@@ -51,8 +51,22 @@ export async function sunatLogin(ruc, usuario, clave) {
       logger.info('Cookies restauradas correctamente');
     }
 
+    const rango = calcularRango6MesesDesdeHoy();
+
     // Navegación dentro del menú
-    await navigateMenu(page, context, ruc, usuario, clave);
+    await navigateMenu(page,rango);
+    
+
+    // Parte 2: Segunda sesión
+    logger.info('---------------------------------------------------------------');
+    logger.info('-----------------------PARTE 2------------------------');
+    await sunatLoginSesion2(context, ruc, usuario, clave,rango);
+
+
+    // Parte 3: Tercera sesión
+    logger.info('---------------------------------------------------------------');
+    logger.info('-----------------------PARTE 3------------------------');
+    await consultaNPSSesion3(context);
 
     // Mantener sesión abierta
     logger.info('Manteniendo el navegador abierto...');
@@ -68,10 +82,7 @@ export async function sunatLogin(ruc, usuario, clave) {
   }
 }
 
-/**
- * Navega por el menú de SUNAT
- */
-async function navigateMenu(page, context, ruc, usuario, clave) {
+async function navigateMenu(page,rango) {
   try {
     await page.click(SELECTORS.MENU.CONSULTAS);
     logger.info("Se hizo clic en 'Consultas'");
@@ -82,12 +93,9 @@ async function navigateMenu(page, context, ruc, usuario, clave) {
     await page.click(SELECTORS.MENU.CONSULTAS_DECLARACIONES_PAGOS);
     logger.info("Se hizo clic en 'Consultas de Declaraciones y Pagos'");
 
-    await handleConsultaDeclaraciones(page);
+    await handleConsultaDeclaraciones(page,rango);
 
-    // Parte 2: Segunda sesión
-    logger.info('---------------------------------------------------------------');
-    logger.info('-----------------------PARTE 2------------------------');
-    await handleSegundaSesion(context, ruc, usuario, clave);
+
 
   } catch (error) {
     logger.error('Error al navegar por el menú', error);
@@ -95,22 +103,19 @@ async function navigateMenu(page, context, ruc, usuario, clave) {
   }
 }
 
-/**
- * Maneja la consulta de declaraciones
- */
-async function handleConsultaDeclaraciones(page) {
+async function handleConsultaDeclaraciones(page,rango) {
   try {
     await wait(5000);
 
     // Buscar frame
     const frames = page.frames();
-    logger.debug('FRAMES DETECTADOS:', { 
+    logger.debug('FRAMES DETECTADOS:', {
       frames: frames.map(f => ({ name: f.name(), url: f.url() }))
     });
 
     const frame = frames.find(
-      f => f.name() === SELECTORS.FRAME.IFRAME_APPLICATION || 
-           f.url().includes('consultaDeclaracionInternetprincipal')
+      f => f.name() === SELECTORS.FRAME.IFRAME_APPLICATION ||
+        f.url().includes('consultaDeclaracionInternetprincipal')
     );
 
     if (!frame) {
@@ -129,38 +134,31 @@ async function handleConsultaDeclaraciones(page) {
     await frame.click('body', { position: { x: 5, y: 5 } });
     logger.info('Se seleccionó la etiqueta de IGV');
 
-    // Fecha
-    const mesInicio = '02';
-    const añoInicio = '2025';
-    const mesFin = '02';
-    const añoFin = '2025';
 
-    logger.info(`Seleccionando mes ${mesInicio} y año ${añoInicio}`);
+    await frame.waitForSelector(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_1, {
+      timeout: TIMEOUTS.ELEMENT_WAIT
+    });
+    await frame.selectOption(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_1, rango.mesInicio);
 
-    await frame.waitForSelector(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_1, { 
-      timeout: TIMEOUTS.ELEMENT_WAIT 
+    await frame.waitForSelector(SELECTORS.FORMULARIO.RANGO_PERIODO_INICIO_ANIO, {
+      timeout: TIMEOUTS.ELEMENT_WAIT
     });
-    await frame.selectOption(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_1, mesInicio);
-    
-    await frame.waitForSelector(SELECTORS.FORMULARIO.RANGO_PERIODO_INICIO_ANIO, { 
-      timeout: TIMEOUTS.ELEMENT_WAIT 
-    });
-    await frame.selectOption(SELECTORS.FORMULARIO.RANGO_PERIODO_INICIO_ANIO, añoInicio);
+    await frame.selectOption(SELECTORS.FORMULARIO.RANGO_PERIODO_INICIO_ANIO, rango.añoInicio);
 
-    await frame.waitForSelector(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_2, { 
-      timeout: TIMEOUTS.ELEMENT_WAIT 
+    await frame.waitForSelector(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_2, {
+      timeout: TIMEOUTS.ELEMENT_WAIT
     });
-    await frame.selectOption(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_2, mesFin);
-    
-    await frame.waitForSelector(SELECTORS.FORMULARIO.RANGO_PERIODO_FIN_ANIO, { 
-      timeout: TIMEOUTS.ELEMENT_WAIT 
+    await frame.selectOption(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_2, rango.mesFin);
+
+    await frame.waitForSelector(SELECTORS.FORMULARIO.RANGO_PERIODO_FIN_ANIO, {
+      timeout: TIMEOUTS.ELEMENT_WAIT
     });
-    await frame.selectOption(SELECTORS.FORMULARIO.RANGO_PERIODO_FIN_ANIO, añoFin);
+    await frame.selectOption(SELECTORS.FORMULARIO.RANGO_PERIODO_FIN_ANIO, rango.añoFin);
 
     logger.info('Mes y año seleccionados correctamente');
 
-    await frame.waitForSelector(SELECTORS.FORMULARIO.BTN_BUSCAR, { 
-      timeout: TIMEOUTS.ELEMENT_WAIT 
+    await frame.waitForSelector(SELECTORS.FORMULARIO.BTN_BUSCAR, {
+      timeout: TIMEOUTS.ELEMENT_WAIT
     });
     await frame.click(SELECTORS.FORMULARIO.BTN_BUSCAR);
     logger.info('Clic en botón Buscar realizado correctamente');
@@ -184,13 +182,93 @@ async function handleConsultaDeclaraciones(page) {
   }
 }
 
-/**
- * Maneja la segunda sesión de SUNAT
- */
-async function handleSegundaSesion(context, ruc, usuario, clave) {
-  const page2 = await context.newPage();
-
+async function navigateMenuSesion2(page2,rango) {
   try {
+    await wait(5000);
+
+    const frames = page2.frames();
+    logger.debug('FRAMES DETECTADOS:', {
+      frames: frames.map(f => ({ name: f.name(), url: f.url() }))
+    });
+
+    const frame = frames.find(f => f.name() === SELECTORS.FRAME.IFRAME_VCE);
+
+    if (frame) {
+
+      const textos = [
+        "Finalizar",
+        "Continuar sin confirmar",
+        "Ver mas tarde"
+      ];
+
+      let hizoAlgo = false;
+
+      for (const texto of textos) {
+        console.log(`\n🔍 Buscando botón visible: "${texto}"`);
+
+        // Filtrar botones que realmente sean visibles
+        const botonesVisibles = frame.locator(
+          `//button[normalize-space(.)="${texto}" and not(contains(@style,"display:none"))]`
+        ).filter({ hasText: texto });
+
+        const count = await botonesVisibles.count();
+        console.log(`➡️ Botones visibles encontrados: ${count}`);
+
+        if (count > 0) {
+
+          for (let i = 0; i < count; i++) {
+            const btn = botonesVisibles.nth(i);
+
+            try {
+              console.log(`🟦 Haciendo clic en "${texto}" (#${i + 1})`);
+              await btn.waitFor({ state: "visible", timeout: 5000 });
+              await btn.click({ timeout: 5000 });
+
+              // esperar a que el DOM cambie antes de buscar otro botón
+              await frame.waitForTimeout(1000);
+            } catch (err) {
+              console.log(`⚠️ No se pudo clicar botón #${i + 1} (probablemente se ocultó).`);
+            }
+          }
+
+          hizoAlgo = true;
+        }
+      }
+
+      if (!hizoAlgo) {
+        console.log("⚠️ No se encontró ningún botón válido para hacer clic.");
+      }
+    }
+
+    // Navegación adicional
+    await page2.click(SELECTORS.MENU2.DECLARACIONES);
+    logger.info("Se hizo clic en 'Mis declaraciones informativas'");
+
+    const li = page2.locator('#nivel2_12_8');
+    await li.scrollIntoViewIfNeeded();
+    await li.click();
+
+    const li2 = page2.locator('#nivel3_12_8_1');
+    await li2.scrollIntoViewIfNeeded();
+    await li2.click();
+
+    const li3 = page2.locator('#nivel4_12_8_1_1_2');
+    await li3.scrollIntoViewIfNeeded();
+    await li3.click();
+
+    await handleSegundaSesion(page2,rango);
+
+
+  } catch (error) {
+    logger.error('Error al navegar por el menú', error);
+    throw error;
+  }
+}
+
+async function sunatLoginSesion2(context, ruc, usuario, clave, rango) {
+  try {
+    const page2 = await context.newPage();
+
     await page2.goto(SUNAT_URLS.LOGIN_MENU_SOL_2);
 
     // Completar formulario
@@ -199,72 +277,90 @@ async function handleSegundaSesion(context, ruc, usuario, clave) {
     await page2.fill(SELECTORS.LOGIN.CLAVE, clave);
     await page2.click(SELECTORS.LOGIN.BTN_ACEPTAR);
 
+    await navigateMenuSesion2(page2,rango);
+    await navegarMenuConsultaNPSSesion3(page2,rango);
+
+  } catch (error) {
+    logger.error('Error al iniciar en la sesion 2', error);
+    throw error;
+  }
+}
+
+
+async function navegarMenuConsultaNPSSesion3(page2){
+  try {
+
     await wait(5000);
-
-    const frames = page2.frames();
-    logger.debug('FRAMES DETECTADOS:', { 
-      frames: frames.map(f => ({ name: f.name(), url: f.url() }))
-    });
-
-    const frame = frames.find(f => f.name() === SELECTORS.FRAME.IFRAME_VCE);
-
-    if (frame) {
-      await frame.waitForSelector('button:has-text("Finalizar")', { timeout: 5000 });
-      await frame.click("text=Finalizar");
-      logger.info("Se hizo clic en 'Finalizar'");
-
-      await frame.waitForSelector('button:has-text("Continuar sin confirmar")', { timeout: 5000 });
-      await frame.click("text=Continuar sin confirmar");
-      logger.info("Se hizo clic en 'Continuar sin confirmar'");
-    }
-
-    // Navegación adicional
-    await page2.click("text=Mis declaraciones informativas");
-    logger.info("Se hizo clic en 'Mis declaraciones informativas'");
-
-    await page2.click("text=Consulto mis declaraciones y pagos");
-    logger.info("Se hizo clic en 'Consulto mis declaraciones y pagos'");
-
-    await page2.click("text=Declaraciones y pagos");
-    logger.info("Se hizo clic en 'Declaraciones y pagos'");
-
-    await page2.click("text=Consulta general");
-    logger.info("Se hizo clic en 'Consulta general'");
-
-    await page2.selectOption('select[name="importepagado"]', '2');
-    logger.info("Se seleccionó el importe pagado");
-
-    // Fecha (PERIODO TRIBUTARIO)
-    const mesDesde = '02';
-    const añoDesde = '2025';
-    const mesHasta = '02';
-    const añoHasta = '2025';
-
-    await page2.selectOption('select[name="mdesde"]', mesDesde);
-    await page2.selectOption('select[name="adesde"]', añoDesde);
-    await page2.selectOption('select[name="mhasta"]', mesHasta);
-    await page2.selectOption('select[name="ahasta"]', añoHasta);
-
-    if (frame) {
-      await frame.click(SELECTORS.FORMULARIO.BTN_BUSCAR);
-      logger.info("Clic en botón Buscar realizado correctamente");
-    }
 
     await page2.click('button.aOpcionInicio');
     logger.info("Clic en botón Ir a Inicio");
 
+    const btnEmpresa = page2.locator('#divOpcionServicio2');
+    await btnEmpresa.click();
+    logger.info("Clic en botón Empresas");
+
     // Navegación adicional
-    await page2.click("text=Mis declaraciones informativas");
+
+    await page2.click(SELECTORS.MENU2.DECLARACIONES);
     logger.info("Se hizo clic en 'Mis declaraciones informativas'");
 
-    await page2.click("text=Presento mis declaraciones y pagos");
-    logger.info("Se hizo clic en 'Presento mis declaraciones y pagos'");
+    const li = page2.locator('#nivel2_12_1');
+    await li.scrollIntoViewIfNeeded();
+    await li.click();
 
-    await page2.click("text=Declarativas");
-    logger.info("Se hizo clic en 'Declarativas'");
+    const li2 = page2.locator('#nivel3_12_1_1');
+    await li2.scrollIntoViewIfNeeded();
+    await li2.click();
 
-    await page2.click("text=Consulta de NPS");
-    logger.info("Se hizo clic en 'Consulta de NPS'");
+    const li3 = page2.locator('#nivel4_12_1_1_1_7');
+    await li3.scrollIntoViewIfNeeded();
+    await li3.click();
+
+  } catch (error) {
+    logger.error('Error al iniciar en la sesion 3', error);
+    throw error;
+  }
+}
+
+
+async function handleSegundaSesion(page2,rango) {
+  try {
+
+    await wait(5000);
+
+    const frames = page2.frames();
+    logger.debug('FRAMES DETECTADOS:', {
+      frames: frames.map(f => ({ name: f.name(), url: f.url() }))
+    });
+
+    const frame2 = frames.find(f => f.name() === SELECTORS.FRAME.IFRAME_APPLICATION);
+
+    if (!frame2) {
+      console.log("❌ No se encontró el iframe:", SELECTORS.FRAME.IFRAME_APPLICATION);
+
+      console.log("📌 Iframes encontrados:");
+      for (const f of frames) console.log(" -", f.name());
+
+      throw new Error("IFRAME_APPLICATION no existe en esta página");
+    }
+
+    console.log("➡️ Iframe encontrado:", frame2.name());
+
+    await frame2.waitForSelector('select[name="importepagado"]', { timeout: 10000 });
+
+    await frame2.selectOption('select[name="importepagado"]', '2');
+
+    logger.info("Se seleccionó el importe pagado");
+
+    await frame2.selectOption('select[name="mdesde"]', rango.mesInicio);
+    await frame2.selectOption('select[name="adesde"]', rango.añoInicio);
+    await frame2.selectOption('select[name="mhasta"]', rango.mesFin);
+    await frame2.selectOption('select[name="ahasta"]', rango.añoFin);
+
+    if (frame2) {
+      await frame2.click(SELECTORS.FORMULARIO.BTN_BUSCAR);
+      logger.info("Clic en botón Buscar realizado correctamente");
+    }
 
   } catch (error) {
     logger.error('Error en segunda sesión', error);

@@ -73,3 +73,34 @@ export function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+
+export function calcularRango6MesesDesdeHoy() {
+  const hoy = new Date();
+
+  // Mes y año finales (mes actual)
+  let mFin = hoy.getMonth() + 1; // getMonth() va de 0 a 11
+  let yFin = hoy.getFullYear();
+
+  // Calcular 6 meses atrás (incluyendo mes actual → restar 5)
+  let mInicio = mFin - 5;
+  let yInicio = yFin;
+
+  // Ajustar si cruza al año anterior
+  if (mInicio <= 0) {
+    mInicio = 12 + mInicio;
+    yInicio = yFin - 1;
+  }
+
+  // Formateo
+  const mesInicio = String(mInicio).padStart(2, "0");
+  const mesFinFmt = String(mFin).padStart(2, "0");
+
+  return {
+    mesInicio,
+    añoInicio: String(yInicio),
+    mesFin: mesFinFmt,
+    añoFin: String(yFin)
+  };
+}
+
+
