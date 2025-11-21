@@ -1,7 +1,7 @@
 import { browserService } from '../browser/browserService.js';
 import { config } from '../../config/index.js';
 import { logger } from '../../utils/logger.js';
-import { saveSession, loadSession, wait, calcularRango6MesesDesdeHoy, generarMesesDelRango } from '../../utils/helpers.js';
+import { saveSession, loadSession, wait, calcularRango6MesesDesdeHoy, generarMesesDelRango, obtenerTablaCompleta, extraerColumnas } from '../../utils/helpers.js';
 import { SUNAT_URLS, SELECTORS, TIMEOUTS } from '../../config/constants.js';
 
 /**
@@ -62,12 +62,6 @@ export async function sunatLogin(ruc, usuario, clave) {
     logger.info('-----------------------PARTE 2------------------------');
     const resulImporte = await sunatLoginSesion2(context, ruc, usuario, clave, rango);
 
-
-    // Parte 3: Tercera sesión
-    logger.info('---------------------------------------------------------------');
-    logger.info('-----------------------PARTE 3------------------------');
-    // await consultaNPSSesion3(context);
-
     // Mantener sesión abierta
     logger.info('Manteniendo el navegador abierto...');
     await wait(10000);
@@ -76,9 +70,10 @@ export async function sunatLogin(ruc, usuario, clave) {
 
     return {
       rentas: resultados,
-      importePagado: resulImporte
+      importePagado: resulImporte.importe,
+      nps: resulImporte.nps
     };
-    
+
 
   } catch (error) {
     logger.error('Error en sunatLogin', error);
@@ -337,9 +332,12 @@ async function sunatLoginSesion2(context, ruc, usuario, clave, rango) {
     await page2.click(SELECTORS.LOGIN.BTN_ACEPTAR);
 
     const resulImporte = await navigateMenuSesion2(page2, rango);
-    await navegarMenuConsultaNPSSesion3(page2, rango);
+    const resulNPS = await navegarMenuConsultaNPSSesion3(page2, rango);
 
-    return resulImporte;
+    return {
+      importe: resulImporte,
+      nps: resulNPS
+    };
 
   } catch (error) {
     logger.error('Error al iniciar en la sesion 2', error);
@@ -376,6 +374,13 @@ async function navegarMenuConsultaNPSSesion3(page2) {
     const li3 = page2.locator('#nivel4_12_1_1_1_7');
     await li3.scrollIntoViewIfNeeded();
     await li3.click();
+
+    // Parte 3: Tercera sesión
+    logger.info('---------------------------------------------------------------');
+    logger.info('-----------------------PARTE 3------------------------');
+    const resulNPS = await consultaNPSSesion3(page2);
+
+    return resulNPS;
 
   } catch (error) {
     logger.error('Error al iniciar en la sesion 3', error);
@@ -424,33 +429,13 @@ async function handleSegundaSesion(page2, rango) {
       await frame2.click(SELECTORS.FORMULARIO.BTN_BUSCAR);
       logger.info("Clic en botón Buscar realizado correctamente");
 
-      // Esperar que la tabla cargue
-      await frame2.waitForSelector("#tblDetalleDeclPagos tbody tr", {
-        timeout: 15000
-      });
+      await frame2.waitForSelector("#tblDetalleDeclPagos tbody tr", { timeout: 15000 });
 
-      const obtenerTablaCompleta = async (frame, selectorTabla) => {
-        return await frame.$$eval(`${selectorTabla} tbody tr`, filas =>
-          filas.map(fila => {
-            const celdas = [...fila.querySelectorAll("td")];
-            return celdas.map(td => td.innerText.trim());
-          })
-        );
-      };
 
-      // Uso:
       const tabla = await obtenerTablaCompleta(frame2, "#tblDetalleDeclPagos");
 
-      const extraerColumnas = (tabla, indices) => {
-        return tabla.map(fila =>
-          indices.map(i => fila[i] ?? null) // si una columna no existe, devuelve null
-        );
-      };
+      const columnas = extraerColumnas(tabla, [5, 9]); // indices de fecha e importe
 
-      const columnas = extraerColumnas(tabla, [5, 9]);
-      console.log(columnas);
-
-      // Guardar en array de resultados
       for (const fila of columnas) {
         resultados.push({
           fechaPres: fila[0], // primera columna
@@ -467,3 +452,66 @@ async function handleSegundaSesion(page2, rango) {
   }
 }
 
+async function consultaNPSSesion3(page2) {
+  try {
+    await wait(5000);
+
+    const frames = page2.frames();
+    logger.debug('FRAMES DETECTADOS:', {
+      frames: frames.map(f => ({ name: f.name(), url: f.url() }))
+    });
+
+    const frame = frames.find(f => f.name() === SELECTORS.FRAME.IFRAME_APPLICATION);
+
+    if (frame) {
+
+      // const tablas = await frame.$$eval("table", tables =>
+      //   tables.map((t, i) => ({
+      //     index: i,
+      //     rows: t.querySelectorAll("tr").length,
+      //     html: t.outerHTML.substring(0, 150) // preview
+      //   }))
+      // );
+
+      // console.log("📌 Tablas encontradas:", tablas);
+
+      await frame.waitForSelector("table tbody tr", { timeout: 15000 });
+
+      const tabla = await frame.$$eval("table", tables => {
+        const t = tables.find(tbl => tbl.innerText.includes("NPS"));
+        if (!t) return [];
+
+        return [...t.querySelectorAll("tbody tr")].map(row =>
+          [...row.querySelectorAll("td")].map(td => td.innerText.trim())
+        );
+      });
+
+      const columnas = extraerColumnas(tabla, [1, 3]); // indices de fecha e importe
+
+      const filasUtiles = columnas.filter(fila => {
+        const fecha = fila[0];
+        const monto = fila[1];
+
+        return (
+          fecha &&
+          monto &&
+          fecha.includes("/") &&       // debe parecer una fecha
+          monto.includes("S/.")        // debe ser un monto válido
+        );
+      });
+
+      const resultados = filasUtiles.map(fila => ({
+        fechaPres: fila[0],
+        importe: fila[1]
+      }));
+
+      console.log("📌 Resultados finales:", resultados);
+
+      return resultados;
+    }
+
+  } catch (error) {
+    logger.error('Error en consulta NPS sesión 3', error);
+    throw error;
+  }
+}

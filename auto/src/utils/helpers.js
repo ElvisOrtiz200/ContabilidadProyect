@@ -128,6 +128,23 @@ export function generarMesesDelRango(rango) {
   return meses;
 }
 
+export const obtenerTablaCompleta = async (frame, selectorTabla) => {
+  return await frame.$$eval(`${selectorTabla} tbody tr`, filas =>
+    filas.map(fila => {
+      const celdas = [...fila.querySelectorAll("td")];
+      return celdas.map(td => td.innerText.trim());
+    })
+  );
+};
+
+export const extraerColumnas = (tabla, indices) => {
+  return tabla.map(fila =>
+    indices.map(i => fila[i] ?? null)
+  );
+};
+
+
+
 
 
 

@@ -15,7 +15,8 @@ export const SunatController = {
         message: 'Sesión iniciada correctamente, proceso ejecutandose',
         data: {
           renta: result.rentas,
-          importe: result.importePagado
+          importe: result.importePagado,
+          nps: result.nps
         }
       });
     } catch (error) {
