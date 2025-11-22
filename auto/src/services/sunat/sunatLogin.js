@@ -1,7 +1,7 @@
 import { browserService } from '../browser/browserService.js';
 import { config } from '../../config/index.js';
 import { logger } from '../../utils/logger.js';
-import { saveSession, loadSession, wait, calcularRango6MesesDesdeHoy } from '../../utils/helpers.js';
+import { saveSession, loadSession, wait, calcularRango6MesesDesdeHoy, generarMesesDelRango, obtenerTablaCompleta, extraerColumnas } from '../../utils/helpers.js';
 import { SUNAT_URLS, SELECTORS, TIMEOUTS } from '../../config/constants.js';
 
 /**
@@ -54,23 +54,26 @@ export async function sunatLogin(ruc, usuario, clave) {
     const rango = calcularRango6MesesDesdeHoy();
 
     // Navegación dentro del menú
-    await navigateMenu(page,rango);
-    
+    const resultados = await navigateMenu(page, rango);
+
 
     // Parte 2: Segunda sesión
     logger.info('---------------------------------------------------------------');
     logger.info('-----------------------PARTE 2------------------------');
-    await sunatLoginSesion2(context, ruc, usuario, clave,rango);
-
-
-    // Parte 3: Tercera sesión
-    logger.info('---------------------------------------------------------------');
-    logger.info('-----------------------PARTE 3------------------------');
-    await consultaNPSSesion3(context);
+    const resulImporte = await sunatLoginSesion2(context, ruc, usuario, clave, rango);
 
     // Mantener sesión abierta
     logger.info('Manteniendo el navegador abierto...');
     await wait(10000);
+
+    console.log(resultados);
+
+    return {
+      rentas: resultados,
+      importePagado: resulImporte.importe,
+      nps: resulImporte.nps
+    };
+
 
   } catch (error) {
     logger.error('Error en sunatLogin', error);
@@ -82,7 +85,7 @@ export async function sunatLogin(ruc, usuario, clave) {
   }
 }
 
-async function navigateMenu(page,rango) {
+async function navigateMenu(page, rango) {
   try {
     await page.click(SELECTORS.MENU.CONSULTAS);
     logger.info("Se hizo clic en 'Consultas'");
@@ -93,9 +96,9 @@ async function navigateMenu(page,rango) {
     await page.click(SELECTORS.MENU.CONSULTAS_DECLARACIONES_PAGOS);
     logger.info("Se hizo clic en 'Consultas de Declaraciones y Pagos'");
 
-    await handleConsultaDeclaraciones(page,rango);
+    const resultados = await handleConsultaDeclaraciones(page, rango);
 
-
+    return resultados;
 
   } catch (error) {
     logger.error('Error al navegar por el menú', error);
@@ -103,7 +106,7 @@ async function navigateMenu(page,rango) {
   }
 }
 
-async function handleConsultaDeclaraciones(page,rango) {
+async function handleConsultaDeclaraciones(page, rango) {
   try {
     await wait(5000);
 
@@ -134,47 +137,97 @@ async function handleConsultaDeclaraciones(page,rango) {
     await frame.click('body', { position: { x: 5, y: 5 } });
     logger.info('Se seleccionó la etiqueta de IGV');
 
+    const resultados = [];
+    const meses = generarMesesDelRango(rango);
 
-    await frame.waitForSelector(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_1, {
-      timeout: TIMEOUTS.ELEMENT_WAIT
-    });
-    await frame.selectOption(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_1, rango.mesInicio);
+    for (const periodo of meses) {
+      logger.info(`📅 Procesando mes ${periodo.mes}/${periodo.año} ...`);
 
-    await frame.waitForSelector(SELECTORS.FORMULARIO.RANGO_PERIODO_INICIO_ANIO, {
-      timeout: TIMEOUTS.ELEMENT_WAIT
-    });
-    await frame.selectOption(SELECTORS.FORMULARIO.RANGO_PERIODO_INICIO_ANIO, rango.añoInicio);
+      // 👉 Seleccionar mes INICIO
+      await frame.waitForSelector(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_1);
+      await frame.selectOption(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_1, periodo.mes);
 
-    await frame.waitForSelector(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_2, {
-      timeout: TIMEOUTS.ELEMENT_WAIT
-    });
-    await frame.selectOption(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_2, rango.mesFin);
+      await frame.waitForSelector(SELECTORS.FORMULARIO.RANGO_PERIODO_INICIO_ANIO);
+      await frame.selectOption(SELECTORS.FORMULARIO.RANGO_PERIODO_INICIO_ANIO, periodo.año);
 
-    await frame.waitForSelector(SELECTORS.FORMULARIO.RANGO_PERIODO_FIN_ANIO, {
-      timeout: TIMEOUTS.ELEMENT_WAIT
-    });
-    await frame.selectOption(SELECTORS.FORMULARIO.RANGO_PERIODO_FIN_ANIO, rango.añoFin);
+      // 👉 Seleccionar mes FIN (igual al inicio porque es mensual)
+      await frame.waitForSelector(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_2);
+      await frame.selectOption(SELECTORS.FORMULARIO.PERIODO_TRIBUTARIO_2, periodo.mes);
 
-    logger.info('Mes y año seleccionados correctamente');
+      await frame.waitForSelector(SELECTORS.FORMULARIO.RANGO_PERIODO_FIN_ANIO);
+      await frame.selectOption(SELECTORS.FORMULARIO.RANGO_PERIODO_FIN_ANIO, periodo.año);
 
-    await frame.waitForSelector(SELECTORS.FORMULARIO.BTN_BUSCAR, {
-      timeout: TIMEOUTS.ELEMENT_WAIT
-    });
-    await frame.click(SELECTORS.FORMULARIO.BTN_BUSCAR);
-    logger.info('Clic en botón Buscar realizado correctamente');
+      logger.info(`✔ Mes seleccionado: ${periodo.mes}/${periodo.año}`);
 
-    await wait(2000);
+      // 👉 BOTÓN BUSCAR
+      await frame.waitForSelector(SELECTORS.FORMULARIO.BTN_BUSCAR);
+      await frame.click(SELECTORS.FORMULARIO.BTN_BUSCAR);
 
-    await frame.click('a[ng-click="mostrarDetalle(constancia);"]');
-    logger.info('Se hizo clic en el Detalle');
+      logger.info('🔍 Se hizo clic en Buscar');
 
-    await wait(1000);
+      await wait(2000);
 
-    const valorRenta = await frame.textContent(
-      'tr:has-text("Total deuda tributaria") td.text-right.ng-binding:last-child'
-    );
+      // LOCALIZADOR del botón Detalle (puede haber varios en DOM)
+      const detalleLocator = frame.locator('a[ng-click="mostrarDetalle(constancia);"]');
+      const totalDetalles = await detalleLocator.count();
 
-    logger.info('Total deuda tributaria (Renta):', { valor: valorRenta?.trim() });
+      if (totalDetalles === 0) {
+        logger.warn(`No existe el elemento detalle en DOM para ${periodo.mes}/${periodo.año}. Continuando...`);
+        break; // o 'break' si quieres terminar todo el proceso
+      }
+
+      // Buscar el primer botón que esté realmente VISIBLE
+      let botonVisible = null;
+      for (let i = 0; i < totalDetalles; i++) {
+        const item = detalleLocator.nth(i);
+        // isVisible() devuelve true si el elemento está renderizado y visible
+        const visible = await item.isVisible().catch(() => false);
+        if (visible) {
+          botonVisible = item;
+          break;
+        }
+      }
+
+      if (!botonVisible) {
+        // El elemento existe en el DOM pero todos están ocultos -> no hay resultado
+        logger.warn(`El/los elementos detalle existen pero están ocultos para ${periodo.mes}/${periodo.año}. Continuando...`);
+        continue; // pasa al siguiente mes
+      }
+
+      // Si llegamos aquí, tenemos un botón visible: hacer click seguro
+      try {
+        await botonVisible.scrollIntoViewIfNeeded();
+        await botonVisible.click({ timeout: 8000 });
+        logger.info(`Se hizo clic en Detalle para ${periodo.mes}/${periodo.año}`);
+      } catch (err) {
+        logger.warn(`No se pudo clicar detalle para ${periodo.mes}/${periodo.año} (se ocultó o no está interactivo).`, { err: err.message });
+        continue; // opción segura: seguir con el siguiente mes
+      }
+
+      // pequeño wait para que cargue el detalle
+      await wait(1000);
+
+      // ahora leer el valor (siempre que el detalle se haya mostrado)
+      const valorRenta = await frame.textContent(
+        'tr:has-text("Total deuda tributaria") td.text-right.ng-binding:last-child'
+      );
+
+      const valorFinal = valorRenta ? valorRenta.trim() : null;
+
+      // puede que valorRenta sea null/undefined si la tabla no apareció
+      logger.info(`Total deuda tributaria (${periodo.mes}/${periodo.año}):`, { valor: valorRenta?.trim() ?? 'SIN VALOR' });
+
+      await frame.click('button[ng-click="closeModal()"]');
+
+      // Guardar en array de resultados
+      resultados.push({
+        mes: periodo.mes,
+        año: periodo.año,
+        renta: valorFinal,
+      });
+    }
+
+    return resultados;
 
   } catch (error) {
     logger.error('Error al seleccionar mes o año', error);
@@ -182,7 +235,7 @@ async function handleConsultaDeclaraciones(page,rango) {
   }
 }
 
-async function navigateMenuSesion2(page2,rango) {
+async function navigateMenuSesion2(page2, rango) {
   try {
     await wait(5000);
 
@@ -198,7 +251,7 @@ async function navigateMenuSesion2(page2,rango) {
       const textos = [
         "Finalizar",
         "Continuar sin confirmar",
-        "Ver mas tarde"
+        "Ver más tarde"
       ];
 
       let hizoAlgo = false;
@@ -256,8 +309,9 @@ async function navigateMenuSesion2(page2,rango) {
     await li3.scrollIntoViewIfNeeded();
     await li3.click();
 
-    await handleSegundaSesion(page2,rango);
+    const resulImporte = await handleSegundaSesion(page2, rango);
 
+    return resulImporte;
 
   } catch (error) {
     logger.error('Error al navegar por el menú', error);
@@ -277,8 +331,13 @@ async function sunatLoginSesion2(context, ruc, usuario, clave, rango) {
     await page2.fill(SELECTORS.LOGIN.CLAVE, clave);
     await page2.click(SELECTORS.LOGIN.BTN_ACEPTAR);
 
-    await navigateMenuSesion2(page2,rango);
-    await navegarMenuConsultaNPSSesion3(page2,rango);
+    const resulImporte = await navigateMenuSesion2(page2, rango);
+    const resulNPS = await navegarMenuConsultaNPSSesion3(page2, rango);
+
+    return {
+      importe: resulImporte,
+      nps: resulNPS
+    };
 
   } catch (error) {
     logger.error('Error al iniciar en la sesion 2', error);
@@ -287,7 +346,7 @@ async function sunatLoginSesion2(context, ruc, usuario, clave, rango) {
 }
 
 
-async function navegarMenuConsultaNPSSesion3(page2){
+async function navegarMenuConsultaNPSSesion3(page2) {
   try {
 
     await wait(5000);
@@ -316,6 +375,13 @@ async function navegarMenuConsultaNPSSesion3(page2){
     await li3.scrollIntoViewIfNeeded();
     await li3.click();
 
+    // Parte 3: Tercera sesión
+    logger.info('---------------------------------------------------------------');
+    logger.info('-----------------------PARTE 3------------------------');
+    const resulNPS = await consultaNPSSesion3(page2);
+
+    return resulNPS;
+
   } catch (error) {
     logger.error('Error al iniciar en la sesion 3', error);
     throw error;
@@ -323,7 +389,7 @@ async function navegarMenuConsultaNPSSesion3(page2){
 }
 
 
-async function handleSegundaSesion(page2,rango) {
+async function handleSegundaSesion(page2, rango) {
   try {
 
     await wait(5000);
@@ -357,13 +423,95 @@ async function handleSegundaSesion(page2,rango) {
     await frame2.selectOption('select[name="mhasta"]', rango.mesFin);
     await frame2.selectOption('select[name="ahasta"]', rango.añoFin);
 
+    const resultados = [];
+
     if (frame2) {
       await frame2.click(SELECTORS.FORMULARIO.BTN_BUSCAR);
       logger.info("Clic en botón Buscar realizado correctamente");
+
+      await frame2.waitForSelector("#tblDetalleDeclPagos tbody tr", { timeout: 15000 });
+
+
+      const tabla = await obtenerTablaCompleta(frame2, "#tblDetalleDeclPagos");
+
+      const columnas = extraerColumnas(tabla, [5, 9]); // indices de fecha e importe
+
+      for (const fila of columnas) {
+        resultados.push({
+          fechaPres: fila[0], // primera columna
+          importe: fila[1],   // segunda columna
+        });
+      }
     }
+
+    return resultados;
 
   } catch (error) {
     logger.error('Error en segunda sesión', error);
+    throw error;
+  }
+}
+
+async function consultaNPSSesion3(page2) {
+  try {
+    await wait(5000);
+
+    const frames = page2.frames();
+    logger.debug('FRAMES DETECTADOS:', {
+      frames: frames.map(f => ({ name: f.name(), url: f.url() }))
+    });
+
+    const frame = frames.find(f => f.name() === SELECTORS.FRAME.IFRAME_APPLICATION);
+
+    if (frame) {
+
+      // const tablas = await frame.$$eval("table", tables =>
+      //   tables.map((t, i) => ({
+      //     index: i,
+      //     rows: t.querySelectorAll("tr").length,
+      //     html: t.outerHTML.substring(0, 150) // preview
+      //   }))
+      // );
+
+      // console.log("📌 Tablas encontradas:", tablas);
+
+      await frame.waitForSelector("table tbody tr", { timeout: 15000 });
+
+      const tabla = await frame.$$eval("table", tables => {
+        const t = tables.find(tbl => tbl.innerText.includes("NPS"));
+        if (!t) return [];
+
+        return [...t.querySelectorAll("tbody tr")].map(row =>
+          [...row.querySelectorAll("td")].map(td => td.innerText.trim())
+        );
+      });
+
+      const columnas = extraerColumnas(tabla, [1, 3]); // indices de fecha e importe
+
+      const filasUtiles = columnas.filter(fila => {
+        const fecha = fila[0];
+        const monto = fila[1];
+
+        return (
+          fecha &&
+          monto &&
+          fecha.includes("/") &&       // debe parecer una fecha
+          monto.includes("S/.")        // debe ser un monto válido
+        );
+      });
+
+      const resultados = filasUtiles.map(fila => ({
+        fechaPres: fila[0],
+        importe: fila[1]
+      }));
+
+      console.log("📌 Resultados finales:", resultados);
+
+      return resultados;
+    }
+
+  } catch (error) {
+    logger.error('Error en consulta NPS sesión 3', error);
     throw error;
   }
 }

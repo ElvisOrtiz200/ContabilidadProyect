@@ -103,4 +103,48 @@ export function calcularRango6MesesDesdeHoy() {
   };
 }
 
+export function generarMesesDelRango(rango) {
+  const meses = [];
+
+  let año = parseInt(rango.añoInicio);
+  let mes = parseInt(rango.mesInicio);
+
+  const añoFin = parseInt(rango.añoFin);
+  const mesFin = parseInt(rango.mesFin);
+
+  while (año < añoFin || (año === añoFin && mes <= mesFin)) {
+    meses.push({
+      mes: mes.toString().padStart(2, "0"),
+      año: año.toString()
+    });
+
+    mes++;
+    if (mes > 12) {
+      mes = 1;
+      año++;
+    }
+  }
+
+  return meses;
+}
+
+export const obtenerTablaCompleta = async (frame, selectorTabla) => {
+  return await frame.$$eval(`${selectorTabla} tbody tr`, filas =>
+    filas.map(fila => {
+      const celdas = [...fila.querySelectorAll("td")];
+      return celdas.map(td => td.innerText.trim());
+    })
+  );
+};
+
+export const extraerColumnas = (tabla, indices) => {
+  return tabla.map(fila =>
+    indices.map(i => fila[i] ?? null)
+  );
+};
+
+
+
+
+
 
