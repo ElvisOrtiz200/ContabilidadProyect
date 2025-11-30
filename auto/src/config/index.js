@@ -19,7 +19,7 @@ export const config = {
 
   // Configuración de Playwright
   browser: {
-    headless: process.env.BROWSER_HEADLESS === 'true' || false,
+    headless: true,
     slowMo: parseInt(process.env.BROWSER_SLOW_MO) || 500,
     timeout: parseInt(process.env.BROWSER_TIMEOUT) || 30000,
   },
