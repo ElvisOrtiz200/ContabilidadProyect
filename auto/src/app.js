@@ -4,6 +4,8 @@ import { logger } from './utils/logger.js';
 import { testSupabaseConnection } from './config/supabase.js';
 import authRouter from './routes/authRouter.js';
 import sunatRouter from './routes/sunatRouter.js';
+import empresaRouter from './routes/empresaRouter.js';
+import sunatCredencialesRouter from './routes/sunatCredencialesRouter.js';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler.js';
 import { requestLogger } from './middlewares/logger.js';
 import { corsMiddleware } from './middlewares/cors.js';
@@ -21,6 +23,8 @@ app.use('/auth', authRouter);
 
 // Rutas protegidas
 app.use('/sunat', sunatRouter);
+app.use('/empresas', empresaRouter);
+app.use('/sunat-credenciales', sunatCredencialesRouter);
 
 // Ruta de salud
 app.get('/health', (req, res) => {

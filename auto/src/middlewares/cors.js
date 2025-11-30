@@ -16,7 +16,7 @@ const corsOptions = {
     // En producción, verificar orígenes permitidos
     const allowedOrigins = process.env.ALLOWED_ORIGINS
       ? process.env.ALLOWED_ORIGINS.split(',')
-      : ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:5174'];
+      : ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:5174', 'http://localhost:3002'];
 
     // Permitir requests sin origen (Postman, mobile apps, etc.)
     if (!origin) {

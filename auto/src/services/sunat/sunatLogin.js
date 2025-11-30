@@ -71,7 +71,8 @@ export async function sunatLogin(ruc, usuario, clave) {
     return {
       rentas: resultados,
       importePagado: resulImporte.importe,
-      nps: resulImporte.nps
+      nps: resulImporte.nps,
+      tributos: resulImporte.tributos || []
     };
 
 
@@ -319,6 +320,528 @@ async function navigateMenuSesion2(page2, rango) {
   }
 }
 
+/**
+ * Normaliza una fecha extrayendo solo DD/MM/YYYY (sin hora)
+ */
+function normalizarFechaServicio(fecha) {
+  if (!fecha) return null;
+  const fechaParte = fecha.split(' ')[0];
+  return fechaParte.trim();
+}
+
+/**
+ * Normaliza un importe removiendo "S/." y espacios
+ */
+function normalizarImporteServicio(importe) {
+  if (!importe) return null;
+  return importe
+    .replace(/S\/\./g, '')
+    .replace(/\s/g, '')
+    .trim();
+}
+
+/**
+ * Calcula coincidencias entre importes y NPS
+ */
+function calcularCoincidenciasServicio(importes, nps) {
+  const coincidencias = [];
+
+  if (!importes || !nps || !Array.isArray(importes) || !Array.isArray(nps)) {
+    return coincidencias;
+  }
+
+  for (const itemImporte of importes) {
+    const fechaImporte = normalizarFechaServicio(itemImporte.fechaPres);
+    const importeNormalizado = normalizarImporteServicio(itemImporte.importe);
+
+    if (!fechaImporte || !importeNormalizado) continue;
+
+    for (const itemNps of nps) {
+      const fechaNps = normalizarFechaServicio(itemNps.fechaPres);
+      const importeNpsNormalizado = normalizarImporteServicio(itemNps.importe);
+
+      if (!fechaNps || !importeNpsNormalizado) continue;
+
+      if (fechaImporte === fechaNps && importeNormalizado === importeNpsNormalizado) {
+        coincidencias.push({
+          fechaPres: fechaImporte,
+          importe: {
+            fechaPres: itemImporte.fechaPres,
+            importe: itemImporte.importe
+          },
+          nps: {
+            fechaPres: itemNps.fechaPres,
+            importe: itemNps.importe
+          }
+        });
+        break;
+      }
+    }
+  }
+
+  return coincidencias;
+}
+
+/**
+ * Extrae los tributos, periodos y montos de la página del NPS
+ */
+async function extraerTributosYMontos(page2) {
+  try {
+    await wait(2000); // Esperar a que cargue completamente
+    
+    const frames = page2.frames();
+    const frame = frames.find(f => f.name() === SELECTORS.FRAME.IFRAME_APPLICATION);
+    
+    if (!frame) {
+      logger.warn('⚠️ No se encontró el frame para extraer tributos');
+      return [];
+    }
+
+    await frame.waitForSelector("table", { timeout: 10000 });
+
+    // Buscar todas las tablas que contengan información de tributos
+    const tributos = await frame.$$eval("table", tables => {
+      const resultados = [];
+      
+      for (const table of tables) {
+        // Buscar encabezados para identificar la estructura
+        const headers = table.querySelectorAll("thead tr th, tbody tr:first-child th");
+        const headerTexts = Array.from(headers).map(h => h.textContent?.trim().toLowerCase() || '');
+        
+        const rows = table.querySelectorAll("tbody tr");
+        
+        for (const row of rows) {
+          const cells = row.querySelectorAll("td");
+          
+          if (cells.length === 0) continue; // Saltar filas sin celdas
+          
+          // Intentar identificar columnas por encabezados
+          let periodoIdx = -1;
+          let tributoIdx = -1;
+          let montoIdx = -1;
+          
+          // Buscar índices de columnas por texto de encabezado
+          headerTexts.forEach((text, idx) => {
+            if (text.includes('periodo') || text.includes('período')) periodoIdx = idx;
+            if (text.includes('tributo') || text.includes('concepto') || text.includes('descripción')) tributoIdx = idx;
+            if (text.includes('monto') || text.includes('importe') || text.includes('total')) montoIdx = idx;
+          });
+          
+          // Si no se encontraron encabezados, intentar por posición común
+          if (periodoIdx === -1 && tributoIdx === -1 && montoIdx === -1) {
+            // Estructura común: Periodo (0) | Tributo (1) | Monto (2)
+            if (cells.length >= 3) {
+              periodoIdx = 0;
+              tributoIdx = 2;
+              montoIdx = 5;
+            } else if (cells.length === 2) {
+              tributoIdx = 0;
+              montoIdx = 1;
+            }
+          }
+          
+          // Extraer valores
+          let periodo = null;
+          let tributo = null;
+          let monto = null;
+          
+          if (periodoIdx >= 0 && cells[periodoIdx]) {
+            periodo = cells[periodoIdx].textContent?.trim() || null;
+          }
+          
+          if (tributoIdx >= 0 && cells[tributoIdx]) {
+            tributo = cells[tributoIdx].textContent?.trim() || null;
+          }
+          
+          if (montoIdx >= 0 && cells[montoIdx]) {
+            monto = cells[montoIdx].textContent?.trim() || null;
+          }
+          
+          // Si no se encontró por índices, intentar por contenido
+          if (!tributo || !monto) {
+            // Buscar cualquier celda que parezca un monto
+            for (let i = 0; i < cells.length; i++) {
+              const text = cells[i].textContent?.trim() || '';
+              if (text.includes("S/.") || (text.match(/\d/) && text.match(/[,.]/))) {
+                if (!monto) monto = text;
+                // La celda anterior probablemente sea el tributo
+                if (i > 0 && !tributo) {
+                  tributo = cells[i - 1].textContent?.trim() || null;
+                }
+                // La celda antes del tributo puede ser el periodo
+                if (i > 1 && !periodo) {
+                  const posiblePeriodo = cells[i - 2].textContent?.trim() || '';
+                  if (posiblePeriodo.includes('/') || posiblePeriodo.match(/\d{4}/)) {
+                    periodo = posiblePeriodo;
+                  }
+                }
+                break;
+              }
+            }
+          }
+          
+          // Validar y agregar si tiene tributo y monto
+          if (tributo && monto && (monto.includes("S/.") || monto.match(/\d/))) {
+            // Limpiar periodo si no es válido
+            if (periodo && !periodo.includes('/') && !periodo.match(/\d{4}/)) {
+              periodo = null;
+            }
+            
+            resultados.push({
+              periodo: periodo || null,
+              tributo: tributo,
+              monto: monto
+            });
+          }
+        }
+      }
+      
+      return resultados;
+    });
+
+    // Filtrar duplicados basándose en periodo, tributo y monto
+    const tributosUnicos = [];
+    const vistos = new Set();
+    
+    for (const tributo of tributos) {
+      const clave = `${tributo.periodo || 'null'}-${tributo.tributo}-${tributo.monto}`;
+      if (!vistos.has(clave)) {
+        vistos.add(clave);
+        tributosUnicos.push(tributo);
+      }
+    }
+    
+    logger.info(`📊 Extraídos ${tributos.length} tributos de la página NPS (${tributosUnicos.length} únicos después de filtrar duplicados)`);
+    if (tributosUnicos.length > 0) {
+      logger.info(`📋 Ejemplo de tributo extraído:`, tributosUnicos[0]);
+    }
+    return tributosUnicos;
+
+  } catch (error) {
+    logger.error('Error al extraer tributos y montos:', error);
+    return [];
+  }
+}
+
+/**
+ * Busca y hace click en los NPS que coinciden con los importes
+ * Procesa cada coincidencia una por una, extrae tributos y regresa
+ */
+async function hacerClickEnNPSCoincidentes(page2, frame, coincidencias) {
+  const todosLosTributos = [];
+  
+  try {
+    if (!coincidencias || coincidencias.length === 0) {
+      logger.info('No hay coincidencias para hacer click');
+      return todosLosTributos;
+    }
+
+    logger.info(`🔍 Procesando ${coincidencias.length} coincidencias en la tabla NPS...`);
+    logger.info(`📋 Lista de coincidencias a procesar:`, coincidencias.map((c, idx) => `${idx + 1}. Monto: ${c.nps.importe}`));
+
+    // Procesar cada coincidencia una por una
+    for (let i = 0; i < coincidencias.length; i++) {
+      const coincidencia = coincidencias[i];
+      const montoBuscado = normalizarImporteServicio(coincidencia.nps.importe);
+      
+      logger.info(`\n📋 ========================================`);
+      logger.info(`📋 Procesando coincidencia ${i + 1}/${coincidencias.length}: Monto ${coincidencia.nps.importe}`);
+      logger.info(`📋 ========================================`);
+
+      try {
+        // Esperar un momento antes de buscar el frame (especialmente después del primer regreso)
+        if (i > 0) {
+          logger.info(`⏳ Esperando antes de buscar tabla para coincidencia ${i + 1}...`);
+          await wait(3000); // Esperar más tiempo después de regresar
+        }
+        
+        // Obtener el frame actualizado después de cada regreso
+        let frameActual = null;
+        let intentos = 0;
+        const maxIntentos = 5;
+        
+        while (!frameActual && intentos < maxIntentos) {
+          const frames = page2.frames();
+          frameActual = frames.find(f => f.name() === SELECTORS.FRAME.IFRAME_APPLICATION);
+          
+          if (!frameActual) {
+            intentos++;
+            logger.warn(`⚠️ Intento ${intentos}/${maxIntentos}: No se encontró el frame, esperando...`);
+            await wait(2000);
+          }
+        }
+        
+        if (!frameActual) {
+          logger.error('❌ No se encontró el frame después de múltiples intentos');
+          continue;
+        }
+        
+        logger.info(`✅ Frame encontrado, esperando a que la tabla esté disponible...`);
+        // Esperar a que la tabla esté disponible y recargada
+        await frameActual.waitForSelector("table tbody tr", { timeout: 15000 });
+        await wait(2000); // Esperar adicional para asegurar que la tabla esté completamente cargada
+        logger.info(`✅ Tabla disponible, buscando coincidencia...`);
+
+        // Buscar la tabla que contiene "NPS" en su texto
+        logger.info(`🔍 Buscando tabla de NPS...`);
+        const todasLasTablas = await frameActual.$$("table");
+        logger.info(`📊 Encontradas ${todasLasTablas.length} tablas en el frame`);
+        
+        let tablaNPSIndex = -1;
+        
+        for (let j = 0; j < todasLasTablas.length; j++) {
+          const texto = await todasLasTablas[j].textContent();
+          if (texto && texto.includes("NPS") && texto.includes("Monto")) {
+            tablaNPSIndex = j;
+            logger.info(`✅ Tabla de NPS encontrada en índice ${j}`);
+            break;
+          }
+        }
+
+        if (tablaNPSIndex === -1) {
+          logger.error('❌ No se encontró la tabla de NPS después de buscar en todas las tablas');
+          // Intentar buscar de otra manera
+          logger.info(`🔍 Intentando búsqueda alternativa de tabla NPS...`);
+          const tablaAlternativa = await frameActual.$('table:has-text("NPS")');
+          if (tablaAlternativa) {
+            logger.info(`✅ Tabla encontrada con método alternativo`);
+          } else {
+            logger.error('❌ No se pudo encontrar la tabla de NPS con ningún método');
+            continue;
+          }
+        }
+
+        // Obtener todas las filas de la tabla NPS (obtenerlas de nuevo para asegurar que estén actualizadas)
+        const tablaNPS = todasLasTablas[tablaNPSIndex];
+        const filas = await tablaNPS.$$("tbody tr");
+        logger.info(`📊 Encontradas ${filas.length} filas en la tabla NPS`);
+
+        let encontrado = false;
+
+        for (const fila of filas) {
+          try {
+            // Obtener las celdas de la fila
+            const celdas = await fila.$$("td");
+            
+            if (celdas.length < 4) continue;
+
+            // Obtener el monto de la columna 4 (índice 3) - columna "Monto"
+            const montoCelda = celdas[3];
+            const montoTexto = await montoCelda.textContent();
+            const montoNormalizado = normalizarImporteServicio(montoTexto);
+
+            if (!montoNormalizado) continue;
+
+            // Verificar si este monto coincide con la coincidencia actual
+            if (montoNormalizado === montoBuscado) {
+              logger.info(`✅ Encontrada fila con monto coincidente: ${montoTexto} (buscado: ${montoBuscado})`);
+              // Obtener el link de NPS de la primera columna (índice 0)
+              const celdaNPS = celdas[0];
+              const linkNPS = await celdaNPS.$("a");
+              
+              if (linkNPS) {
+                const numeroNPS = await linkNPS.textContent();
+                logger.info(`✅ Coincidencia encontrada! Haciendo click en NPS: ${numeroNPS?.trim()} - Monto: ${montoTexto}`);
+                
+                // Verificar si este NPS ya fue procesado (para evitar duplicados)
+                const yaProcesado = todosLosTributos.some(t => t.numeroNPS === numeroNPS?.trim());
+                if (yaProcesado) {
+                  logger.warn(`⚠️ Este NPS (${numeroNPS?.trim()}) ya fue procesado, saltando...`);
+                  encontrado = true;
+                  break;
+                }
+                
+                try {
+                  await linkNPS.scrollIntoViewIfNeeded();
+                  await linkNPS.click({ timeout: 5000 });
+                  await wait(4000); // Esperar a que cargue la página del NPS
+                  logger.info(`✅ Click realizado exitosamente en NPS: ${numeroNPS?.trim()}`);
+                  
+                  // Extraer tributos y montos de la página del NPS
+                  logger.info(`📊 Extrayendo tributos y montos del NPS: ${numeroNPS?.trim()}`);
+                  const tributos = await extraerTributosYMontos(page2);
+                  
+                  if (tributos.length > 0) {
+                    todosLosTributos.push({
+                      numeroNPS: numeroNPS?.trim(),
+                      monto: montoTexto,
+                      tributos: tributos
+                    });
+                    logger.info(`✅ Extraídos ${tributos.length} tributos del NPS: ${numeroNPS?.trim()}`);
+                  } else {
+                    logger.warn(`⚠️ No se encontraron tributos en el NPS: ${numeroNPS?.trim()}`);
+                    // Agregar entrada vacía para mantener el registro
+                    todosLosTributos.push({
+                      numeroNPS: numeroNPS?.trim(),
+                      monto: montoTexto,
+                      tributos: []
+                    });
+                  }
+                  
+                  encontrado = true;
+                  
+                  // Regresar usando page2.goBack() - Método más confiable que simula la flecha de atrás
+                  logger.info(`⬅️ ========================================`);
+                  logger.info(`⬅️ INICIANDO PROCESO DE REGRESO`);
+                  logger.info(`⬅️ ========================================`);
+                  
+                  // Esperar un momento después de extraer tributos
+                  await wait(2000);
+                  
+                  let regresoExitoso = false;
+                  
+                  // Método 1: Usar page2.goBack() - Simula la flecha de atrás del navegador (MÁS CONFIABLE)
+                  try {
+                    logger.info(`🔍 Método 1: Regresando usando page2.goBack() (simula flecha de atrás)...`);
+                    await page2.goBack();
+                    await wait(5000); // Esperar a que regrese completamente
+                    logger.info(`✅ Regresado usando page2.goBack()`);
+                    regresoExitoso = true;
+                  } catch (goBackError) {
+                    logger.warn(`⚠️ page2.goBack() falló: ${goBackError.message}, intentando método alternativo...`);
+                  }
+                  
+                  // Método 2: Ejecutar history.go(-1) en la página principal (fallback)
+                  if (!regresoExitoso) {
+                    try {
+                      logger.info('🔍 Método 2: Ejecutando history.go(-1) en página principal...');
+                      await page2.evaluate(() => {
+                        if (window.history && window.history.go) {
+                          window.history.go(-1);
+                        }
+                      });
+                      await wait(5000);
+                      logger.info(`✅ Regresado usando history.go(-1) en página`);
+                      regresoExitoso = true;
+                    } catch (historyError) {
+                      logger.warn('⚠️ Error con history.go(-1) en página:', historyError.message);
+                    }
+                  }
+                  
+                  // Método 3: Ejecutar history.go(-1) en el frame (fallback adicional)
+                  if (!regresoExitoso) {
+                    try {
+                      logger.info('🔍 Método 3: Ejecutando history.go(-1) en el frame...');
+                      const framesDespues = page2.frames();
+                      const frameDespues = framesDespues.find(f => f.name() === SELECTORS.FRAME.IFRAME_APPLICATION);
+                      
+                      if (frameDespues) {
+                        await frameDespues.evaluate(() => {
+                          if (window.history && window.history.go) {
+                            window.history.go(-1);
+                          }
+                        });
+                        await wait(5000);
+                        logger.info(`✅ Regresado usando history.go(-1) en frame`);
+                        regresoExitoso = true;
+                      }
+                    } catch (historyError) {
+                      logger.warn('⚠️ Error con history.go(-1) en frame:', historyError.message);
+                    }
+                  }
+                  
+                  if (regresoExitoso) {
+                    logger.info(`✅ Regresado a la tabla. Esperando a que se recargue completamente...`);
+                    // Esperar más tiempo para asegurar que la tabla se haya recargado completamente
+                    await wait(4000);
+                    
+                    // Verificar que estamos de vuelta en la tabla
+                    const framesVerificacion = page2.frames();
+                    const frameVerificacion = framesVerificacion.find(f => f.name() === SELECTORS.FRAME.IFRAME_APPLICATION);
+                    if (frameVerificacion) {
+                      try {
+                        await frameVerificacion.waitForSelector("table tbody tr", { timeout: 15000 });
+                        logger.info(`✅ Tabla recargada correctamente`);
+                      } catch (waitError) {
+                        logger.warn('⚠️ La tabla no se recargó correctamente:', waitError.message);
+                      }
+                    } else {
+                      logger.warn('⚠️ No se encontró el frame después de regresar');
+                    }
+                  } else {
+                    logger.error('❌ ERROR CRÍTICO: No se pudo regresar con ningún método');
+                  }
+                  
+                  logger.info(`⬅️ ========================================`);
+                  logger.info(`⬅️ PROCESO DE REGRESO COMPLETADO`);
+                  logger.info(`⬅️ ========================================`);
+                  logger.info(`✅ Continuando con siguiente coincidencia...`);
+                  
+                  break; // Salir del loop de filas para procesar la siguiente coincidencia
+                } catch (clickError) {
+                  logger.warn(`⚠️ Error al hacer click en NPS ${numeroNPS?.trim()}:`, clickError.message);
+                  // Intentar regresar aunque haya error usando page2.goBack()
+                  try {
+                    logger.info(`⬅️ Intentando regresar después del error...`);
+                    await page2.goBack();
+                    await wait(3000);
+                    logger.info(`✅ Regresado después del error`);
+                  } catch (backError) {
+                    logger.warn('⚠️ Error al regresar:', backError.message);
+                  }
+                }
+              } else {
+                logger.warn(`⚠️ No se encontró el link de NPS para el monto: ${montoTexto}`);
+              }
+            }
+          } catch (error) {
+            logger.warn('Error al procesar fila de tabla:', error.message);
+            continue;
+          }
+        }
+
+        if (!encontrado) {
+          logger.warn(`⚠️ No se encontró el NPS con monto ${coincidencia.nps.importe} en la tabla`);
+          // Agregar entrada vacía para mantener el registro
+          todosLosTributos.push({
+            numeroNPS: null,
+            monto: coincidencia.nps.importe,
+            tributos: []
+          });
+        } else {
+          logger.info(`✅ Coincidencia ${i + 1} procesada exitosamente`);
+        }
+
+      } catch (error) {
+        logger.error(`❌ Error al procesar coincidencia ${i + 1}:`, error.message);
+        logger.error(`❌ Stack trace:`, error.stack);
+        
+        // Intentar regresar aunque haya error para no bloquear las siguientes coincidencias
+        try {
+          await wait(1000);
+          logger.info(`⬅️ Intentando regresar después del error usando page2.goBack()...`);
+          await page2.goBack();
+          await wait(3000);
+          logger.info(`✅ Regresado después del error. Continuando con siguiente coincidencia...`);
+        } catch (backError) {
+          logger.warn('⚠️ Error al regresar después del error:', backError.message);
+        }
+        
+        // Agregar entrada vacía para mantener el registro de esta coincidencia
+        todosLosTributos.push({
+          numeroNPS: null,
+          monto: coincidencia.nps.importe,
+          tributos: [],
+          error: error.message
+        });
+        
+        continue; // Continuar con la siguiente coincidencia
+      }
+    }
+    
+    logger.info(`\n✅ ========================================`);
+    logger.info(`✅ Proceso completado. Total de coincidencias procesadas: ${todosLosTributos.length}/${coincidencias.length}`);
+    logger.info(`✅ ========================================`);
+
+    logger.info(`\n✅ Proceso completado. Se procesaron ${coincidencias.length} coincidencias. Total de tributos extraídos: ${todosLosTributos.length}`);
+    return todosLosTributos;
+
+  } catch (error) {
+    logger.error('Error al hacer click en NPS coincidentes:', error);
+    throw error;
+  }
+}
+
 async function sunatLoginSesion2(context, ruc, usuario, clave, rango) {
   try {
     const page2 = await context.newPage();
@@ -332,11 +855,12 @@ async function sunatLoginSesion2(context, ruc, usuario, clave, rango) {
     await page2.click(SELECTORS.LOGIN.BTN_ACEPTAR);
 
     const resulImporte = await navigateMenuSesion2(page2, rango);
-    const resulNPS = await navegarMenuConsultaNPSSesion3(page2, rango);
+    const resulNPS = await navegarMenuConsultaNPSSesion3(page2, rango, resulImporte);
 
     return {
       importe: resulImporte,
-      nps: resulNPS
+      nps: resulNPS.nps || resulNPS,
+      tributos: resulNPS.tributos || []
     };
 
   } catch (error) {
@@ -346,7 +870,7 @@ async function sunatLoginSesion2(context, ruc, usuario, clave, rango) {
 }
 
 
-async function navegarMenuConsultaNPSSesion3(page2) {
+async function navegarMenuConsultaNPSSesion3(page2, rango, resulImporte = []) {
   try {
 
     await wait(5000);
@@ -378,9 +902,33 @@ async function navegarMenuConsultaNPSSesion3(page2) {
     // Parte 3: Tercera sesión
     logger.info('---------------------------------------------------------------');
     logger.info('-----------------------PARTE 3------------------------');
+    
+    // Primero obtener los NPS
     const resulNPS = await consultaNPSSesion3(page2);
+    
+    // Calcular coincidencias
+    const coincidencias = calcularCoincidenciasServicio(resulImporte, resulNPS);
+    
+    // Si hay coincidencias, hacer click en los NPS correspondientes y extraer tributos
+    let tributosExtraidos = [];
+    if (coincidencias.length > 0) {
+      logger.info(`🔍 Encontradas ${coincidencias.length} coincidencias, haciendo click en NPS...`);
+      const frames = page2.frames();
+      const frame = frames.find(f => f.name() === SELECTORS.FRAME.IFRAME_APPLICATION);
+      
+      if (frame) {
+        tributosExtraidos = await hacerClickEnNPSCoincidentes(page2, frame, coincidencias);
+      } else {
+        logger.warn('⚠️ No se encontró el frame para hacer click en NPS');
+      }
+    } else {
+      logger.info('ℹ️ No se encontraron coincidencias para hacer click');
+    }
 
-    return resulNPS;
+    return {
+      nps: resulNPS,
+      tributos: tributosExtraidos
+    };
 
   } catch (error) {
     logger.error('Error al iniciar en la sesion 3', error);
