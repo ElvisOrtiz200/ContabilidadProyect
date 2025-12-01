@@ -1,0 +1,5 @@
+{
+    "app_port": 3000,
+    "entrypoint": "node src/app.js"
+  }
+  
